@@ -9,7 +9,6 @@
 #include <TimeLib.h>
 #include <ArduinoJson.h>
 #include <Hash.h>
-#include <FS.h>
 
 ESP8266WebServer server(80);
 WiFiManager wifiManager;
@@ -40,29 +39,13 @@ const int timeZone = -5;  // Eastern Standard Time (USA)
 #define D9 3 // RX0 (Serial console)
 #define D10 1 // TX0 (Serial console)
 const int pinout[11] = {D0, D1, D2, D3, D4, D5, D6, D7, D8, D9, D10};
-//Event struc
-struct Event {
-  time_t unixTime;
-  int code;
-  int portNumber;
-  String value;
-};
-struct Event eventsBuffer[100];
-typedef enum EventCode {CHANGE_PINTOUT_VALUE, CONNECTED, DISCONNECTED
-                       };
-//Access point struc
-struct AccessPoint {
-  String pwd;
-  String ssid;
-};
-struct AccessPoint ac_points[3]; //access points to try connect
 
 //websocket
 boolean websocketConnectionStatus = false;
 int timeToTryReconnectWebSocket = 1 * 60 * 100; //seconds
 //last timestamp to connect websocket
 int lastAttemptConnectionWebSocket = 0;
-// attepts to connect to server
+// attepts to connect to server, ariable to indicate how many time it tried connect to websocket
 int attemptToConnectServer = 0;
 void connectWebSocket() {
   char adressWebSocket[20];
@@ -70,9 +53,9 @@ void connectWebSocket() {
   strcat(adressWebSocket, chipID);
   lastAttemptConnectionWebSocket = millis();
   Serial.println("Trying connect to websocket...");
-    attemptToConnectServer++;
-  webSocket.begin("192.168.25.203", 8025, adressWebSocket);
-//    webSocket.begin("52.67.51.187", 8025, adressWebSocket);
+  attemptToConnectServer++;
+  webSocket.begin("138.68.19.117", 8025, adressWebSocket);
+  //webSocket.begin(" 192.168.1.42", 8025, adressWebSocket);
   //webSocket.setAuthorization("user", "Password"); // HTTP Basic Authorization
 }
 
@@ -90,60 +73,17 @@ void handleStatusRequired(JsonObject& root) {
   JsonArray& values = statusJson.createNestedArray("status");
   for (int i = 0; i < (int)( sizeof(pinout) / sizeof(pinout[0])); i++) {
     int v = digitalRead(pinout[i]);
-    //          Serial.printf("%d - %d  - v: %d ", pinout[i], i, v);
     JsonObject& value = jsonBufferAux.createObject();
     value["ioNum"] = i;
     value["value"] = v;
     String json1;
     value.printTo(json1);
     values.add(value);
-    //    Serial.println(json1);
   }
   String json;
   statusJson.printTo(json);
   Serial.println(json);
   webSocket.sendTXT(json);
-}
-
-void saveEvent(int ioNumber, int v, int code) {
-  struct Event ev;
-  ev.unixTime = now();
-  ev.code = code;
-  ev.portNumber = ioNumber;
-  ev.value = v;
-
-  int lenEvents = (sizeof eventsBuffer / sizeof * eventsBuffer);
-  eventsBuffer[0] = ev; //TODO verificar quando estourar buffer
-  Serial.print("Tamanho eventos: "); Serial.println(lenEvents);
-  if (WiFi.status() == WL_CONNECTED && lenEvents > 50) {
-    const int BUFFER_SIZE = JSON_OBJECT_SIZE(4) + JSON_ARRAY_SIZE(1);
-    Serial.println(BUFFER_SIZE);
-    StaticJsonBuffer<BUFFER_SIZE> jsonBufferAux;
-    JsonObject& rootEvents = jsonBufferAux.createObject();
-    rootEvents["chipId"] = chipID;
-    JsonArray& events = rootEvents.createNestedArray("events");
-    for (int i = 0; i < (int)( (sizeof eventsBuffer / sizeof * eventsBuffer) ); i++) {
-      Event event = eventsBuffer[i];
-      //          Serial.printf("%d - %d  - v: %d ", pinout[i], i, v);
-      JsonObject& jsonEvent = jsonBufferAux.createObject();
-      jsonEvent["time"] = event.unixTime;
-      jsonEvent["code"] = event.code;
-      jsonEvent["ioNumber"] = event.portNumber;
-      jsonEvent["value"] = event.value;
-      //      String json1;
-      //      jsonEvent.printTo(json1);
-      events.add(jsonEvent);
-      //      Serial.println(json1);
-    }
-    String json;
-    rootEvents.printTo(json);
-    Serial.println(json);
-    webSocket.sendTXT(json);
-    memset(eventsBuffer, 0, sizeof(eventsBuffer) * 100);
-  }
-
-
-
 }
 
 void setPinoutValue(int ioNumber, int v) {
@@ -161,7 +101,7 @@ void setPinoutValue(int ioNumber, int v) {
       digitalWrite(D4, LOW);
       break;
   }
-//  saveEvent(ioNumber, v, CHANGE_PINTOUT_VALUE);
+  //  saveEvent(ioNumber, v, CHANGE_PINTOUT_VALUE);
 }
 /**
    Handler user values to set in pins
@@ -181,7 +121,7 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t lenght) {
   switch (type) {
     case WStype_DISCONNECTED:
       Serial.printf("[WSc] Disconnected!\n");
-     websocketConnectionStatus = false;
+      websocketConnectionStatus = false;
       break;
     case WStype_CONNECTED:
       Serial.printf("[WSc] Connected to url: %s\n",  payload);
@@ -195,126 +135,30 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t lenght) {
       JsonObject& root = jsonBuffer.parseObject(text);
       // Test if parsing succeeds.
       if (!root.success()) {
-        Serial.println("parseObject() failed");
+        Serial.print("Failed to parse json: "); Serial.println(text);
         return;
       }
       if (root.containsKey("values") && root["values"].is<JsonArray&>())
       {
-        Serial.println("Values to set");
+        Serial.println("User want set values on pins");
         handleValuesToSet(root);
       } else if (root.containsKey("status")) {
-        Serial.println("Status required");
+        Serial.println("User requires pins status");
         handleStatusRequired(root);
       } else {
-        Serial.println("Invalid JsonObject!!");
+        Serial.print("Json not recognized for IotPazeto Board: "); Serial.println(text);
       }
       break;
   }
-
-}
-
-const char* configFilePath = "/ap_conf.txt";
-//Method to read ap config file and refresh apArray with available access points
-boolean refreshApArrayList() {
-  Serial.print(" ESP.getFreeHeap() 1: "); Serial.println( ESP.getFreeHeap());
-  File file = SPIFFS.open(configFilePath, "r");
-  if (file) {
-    int k = 0;
-    while (k < 3 && file.available()) {
-      //Lets read line by line from the file
-      char val[50] = "\0";
-      int j = 0;
-      while (val[j - 1] != '\r') {
-        val[j] = file.read();
-        j++;
-      }
-      Serial.println(j);
-      String line = val;
-      Serial.print("linha: "); Serial.println(line);
-      int i = line.lastIndexOf(',');
-      Serial.print("index of , "); Serial.println(i);
-      Serial.print("abtes da virgula: "); Serial.println(line.substring(0, i));
-      Serial.print("depois da virgula: "); Serial.println(line.substring(i + 1));
-      //      apArray[k][0] = line.substring(0, i); //ap name
-      //      apArray[k][1] = line.substring(i+1);     //ap pwd
-      Serial.print(" ESP.getFreeHeap() 2: "); Serial.println( ESP.getFreeHeap());
-      Serial.print("k "); Serial.println(k);
-      ac_points[k].ssid = line.substring(0, i);
-      ac_points[k].pwd = line.substring(i + 1);
-      Serial.print("ac_points[k].ssid: "); Serial.println(ac_points[k].ssid);
-      //      strcpy(ac_points[k].ssid, line.substring(0, i));
-      Serial.print("pqp k"); Serial.println(k);
-      //      strcpy(ac_points[k].pwd, line.substring(i + 1));
-      Serial.print("vamo veio, "); Serial.println(i);
-      k++;
-    }
-    Serial.println("antes do close");
-    file.close();
-    return k;
-  }
-}
-
-//Open the config screen when user enter in http://192.168.4.1
-void handleRoot() {
-  refreshApArrayList();
-  char temp[700];
-  snprintf(temp, 700, "<html>\<head>\
-<title>Iot Pazeto</title>\
-</head>\
-<body>\
-<h1>Iot Pazeto</h1>\
-<h1>Configure available Wifi Hotspots</h1>\
-<form action='http://192.168.4.1/submit' method='POST'>\
-SSID1:<input type='text'name='ap1'value=%s>Pass1:<input type='text'name='pwd1'value=%s><br>\
-SSID2:<input type='text'name='ap2'value=%s>Pass2:<input type='text'name='pwd2'value=%s><br>\
-SSID3:<input type='text'name='ap3'value=%s>Pass3:<input type='text'name='pwd3'value=%s><br>\
-<input type=submit value='Submit'>\
-</form>\
-</body>\
-</html>", ac_points[0].ssid.c_str(), ac_points[0].pwd.c_str(), ac_points[1].ssid.c_str(), ac_points[1].pwd.c_str(), ac_points[2].ssid.c_str(), ac_points[2].pwd.c_str());
-  server.send(200, "text/html", temp);
-}
-
-//Handle access pointes sent from user in config mode
-void handleSubmit() {
-  Serial.println("SUBMIT enviado e reconhecido");
-  if (server.args() > 0 ) {
-    Serial.println(server.argName(0));
-    Serial.println(server.arg(0));
-    Serial.println(server.argName(0).startsWith("ap"));
-    Serial.println(server.argName(1).startsWith("pwd"));
-    File f = SPIFFS.open("/ap_conf.txt", "w+");
-    if (f) {
-      for ( uint8_t i = 0; i < server.args(); i = i + 2 ) {
-        if (server.argName(i).startsWith("ap") && server.argName(i + 1).startsWith("pwd")) {
-          Serial.println(server.arg(i));
-          Serial.println(server.arg(i + 1));
-          if (f) {
-            char buffer [100];
-            snprintf (buffer, 100, "%s,%s", server.arg(i).c_str(), server.arg(i + 1).c_str());
-            f.println(buffer);
-          }
-        }
-      }
-      f.close();
-      server.send(200, "text/html", "<h1>Iot Pazeto</h1><br>Access Points saved<br>Exit config mode and wait until connection in one of them!<br><a href='http://192.168.4.1/'>Back</a>");
-      return;
-    } else {
-      Serial.printf("Error on open AP config file!");
-      server.send(200, "text/html", "<h1>Iot Pazeto</h1>\nError on save configuration!");
-      return;
-    }
-  }
-  server.send(200, "text/html", "<h1>Iot Pazeto</h1>\nSomething wrong with submit!");
 }
 
 void configModeCallback (WiFiManager *myWiFiManager) {
-  Serial.println("Entered config mode");
+  Serial.println("Entered AP mode");
   Serial.println(WiFi.softAPIP());
   Serial.println(myWiFiManager->getConfigPortalSSID());
 }
-/*-------- NTP code ----------*/
 
+/*-------- NTP code ----------*/
 const int NTP_PACKET_SIZE = 48; // NTP time is in the first 48 bytes of message
 byte packetBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming & outgoing packets
 // send an NTP request to the time server at the given address
@@ -340,6 +184,7 @@ void sendNTPpacket(IPAddress &address)
   Udp.endPacket();
 }
 time_t getNtpTime()
+
 {
   while (Udp.parsePacket() > 0) ; // discard any previously received packets
   Serial.println("Transmit NTP Request");
@@ -363,7 +208,7 @@ time_t getNtpTime()
   return 0; // return 0 if unable to get the time
 }
 
-boolean configMode = true; //simulate the input pin D3
+boolean configMode = false; //simulate the input pin D5
 
 void saveConfigCallback () {
   Serial.println("Should save config");
@@ -376,7 +221,7 @@ void setup() {
   Serial.begin(115200);
   sprintf(chipID, "%d", ESP.getChipId());
   Serial.setDebugOutput(true);
-  wifiManager.setDebugOutput(true);
+
   for (uint8_t t = 3; t > 0; t--) {
     Serial.printf("[SETUP] BOOT WAIT %d...\n", t);
     Serial.printf(" ESP8266 Chip id = %s\n", chipID);
@@ -384,48 +229,63 @@ void setup() {
     delay(250);
   }
   Serial.print(" ESP.getFreeHeap(): "); Serial.println( ESP.getFreeHeap());
-  // SPIFFS.begin();
+
   pinMode(D0, OUTPUT);
   pinMode(D1, OUTPUT);
-  pinMode(D3, INPUT); //config pin
-  pinMode(D4, OUTPUT);
+  pinMode(D5, INPUT); //config pin
+  //pinMode(D4, OUTPUT);
 
-  digitalWrite(D4, HIGH); //D4 has inverted logic
+  
+  
+  pinMode(D7, OUTPUT); // led
+  pinMode(D8, OUTPUT); // led
+  
+  //WIFI settings
+ // digitalWrite(D4, LOW); //D4 has inverted logic
+  wifiManager.setDebugOutput(true);
   wifiManager.setAPCallback(configModeCallback);
   wifiManager.setSaveConfigCallback(saveConfigCallback);
-  WiFi.mode(WIFI_AP);
+  wifiManager.setConnectTimeout(20);
+  wifiManager.setConfigPortalTimeout(60 * 3);
+
+  //time sync
   Udp.begin(localPort);
   setSyncProvider(getNtpTime);
+
+  //websocket
   connectWebSocket();
   webSocket.onEvent(webSocketEvent);
 }
-boolean serverConfStarted = false;
+
+int CHANCES_CONNECT_WEB_SOCKET = 10;
 
 void loop() {
-  if (configMode) {
-    Serial.println("configMode true");
-    if (!serverConfStarted) {
-      Serial.println("!serverConfStarted)");
-      wifiManager.setConfigPortalTimeout(30);
-      wifiManager.startConfigPortal(chipID, chipID);
-        //FOCO AQUI aparentemnte não conecta e não sai da config tbm
-        
-      serverConfStarted = true;
-      digitalWrite(D4, !digitalRead(D4));
+
+  //config mode is enable with D3
+  if (digitalRead(D5) == HIGH || configMode) {
+	Serial.println("Biiirlll");
+    Serial.println("!serverConfStarted)");
+    configMode = false;
+	digitalWrite(D7, HIGH);
+    wifiManager.resetSettings();
+    if (!wifiManager.startConfigPortal(chipID, chipID)) {
+      //reset and try again, or maybe put it to deep sleep
+      ESP.deepSleep(0);
+      delay(5000);
+      return;
     }
-    return;
-  }
-  if (WiFi.status() == WL_CONNECTED) {
-     Serial.println("WiFi.status() == WL_CONNECTED");
-    if(attemptToConnectServer >= 3){
-      Serial.println("attemptToConnectServer >= 3");
-        configMode = true;
-        return;
-      }
+  }else if (WiFi.status() == WL_CONNECTED) {
+	digitalWrite(D7, LOW);
+   // Serial.println("WiFi.status() == WL_CONNECTED");
+    if (attemptToConnectServer >= CHANCES_CONNECT_WEB_SOCKET) {
+      Serial.println("attemptToConnectServer >= CHANCES_CONNECT_WEB_SOCKET --->>> something worng when tried connect to websocket.. will enter in config mode again ");
+      configMode = true;
+      return;
+	}
     //Wifi connected
     if (!websocketConnectionStatus && (lastAttemptConnectionWebSocket + timeToTryReconnectWebSocket) < millis()) {
       connectWebSocket();
-       Serial.println("connectWebSocket();");
+      Serial.println("connectWebSocket();");
     }
     webSocket.loop();
 
@@ -436,17 +296,23 @@ void loop() {
       setSyncInterval(1 * 60 * 30);
     }
 
-    if (digitalRead(D4) == HIGH) {
-      digitalWrite(D4, LOW); //D4 has inverted logic
-    }
+    //if (digitalRead(D4) == HIGH) {
+      //digitalWrite(D4, LOW); //D4 has inverted logic
+    //}
 
   } else {
-     Serial.println("WiFi.status() == WL_CONNECTED FALSEEEEE");
-    if (digitalRead(D4) == LOW) {
-      digitalWrite(D4, HIGH); //D4 has inverted logic
-    }
+	digitalWrite(D7, HIGH);
+    Serial.println("WiFi.status() == WL_CONNECTED FALSEEEEE");
     attemptToConnectServer = 0;
-    wifiManager.autoConnect(chipID,chipID);
+    if (!wifiManager.autoConnect(chipID, chipID)) {
+      Serial.println("failed to connect and hit timeout in AUTOCONNECT");
+      delay(3000);
+      //reset and try again, or maybe put it to deep sleep
+      ESP.reset();
+      delay(5000);
+    }else{
+      Serial.println("Connected in wifi via autoConnect!!!");  
+    }
   }
 }
 
