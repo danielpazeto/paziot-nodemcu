@@ -88,8 +88,6 @@ void handleStatusRequired(JsonObject& root) {
 
 void setPinoutValue(int ioNumber, int v) {
   switch (ioNumber) {
-    case 4:
-      digitalWrite(D4, v);
       break;
     case 0:
       digitalWrite(D0, v);
@@ -97,22 +95,18 @@ void setPinoutValue(int ioNumber, int v) {
     case 1:
       digitalWrite(D1, v);
       break;
-    default:
-      digitalWrite(D4, LOW);
-      break;
   }
-  //  saveEvent(ioNumber, v, CHANGE_PINTOUT_VALUE);
 }
 /**
-   Handler user values to set in pins
+   Handle user values to set in pins
+   {"values":[{"value":"0","ioNumber":16}],"user_email":"a"}
 */
 void handleValuesToSet(JsonObject& root) {
-  // {"values":[{"value":"HIGH","ioNumber":16}],"user_email":"a"}
   JsonArray& nestedArray = root["values"].asArray();
   for (int i = 0; i < nestedArray.size(); i++) {
     int ioNumber = nestedArray[i]["ioNumber"];
     int v = nestedArray[i]["value"].as<int>();
-    Serial.println(pinout[ioNumber]);
+    Serial.print("Pin: ");Serial.print(pinout[ioNumber]);Serial.print(" - Value: ");Serial.println(v);
     setPinoutValue(ioNumber, v);
   }
 }
@@ -218,7 +212,7 @@ void saveConfigCallback () {
 }
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
   sprintf(chipID, "%d", ESP.getChipId());
   Serial.setDebugOutput(true);
 
@@ -232,16 +226,12 @@ void setup() {
 
   pinMode(D0, OUTPUT);
   pinMode(D1, OUTPUT);
-  pinMode(D5, INPUT); //config pin
-  //pinMode(D4, OUTPUT);
-
-  
+ // pinMode(D5, INPUT);digitalWrite(D5, LOW); //config pin
   
   pinMode(D7, OUTPUT); // led
   pinMode(D8, OUTPUT); // led
   
   //WIFI settings
- // digitalWrite(D4, LOW); //D4 has inverted logic
   wifiManager.setDebugOutput(true);
   wifiManager.setAPCallback(configModeCallback);
   wifiManager.setSaveConfigCallback(saveConfigCallback);
@@ -261,16 +251,23 @@ int CHANCES_CONNECT_WEB_SOCKET = 10;
 
 void loop() {
 
-  //config mode is enable with D3
-  if (digitalRead(D5) == HIGH || configMode) {
+  //config mode is enable with D5
+  if (digitalRead(D5) == LOW){
+	Serial.println("PINNO MALDITOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO");
+  }
+  
+  
+  
+  
+  if (digitalRead(D5) == LOW || configMode) {
 	Serial.println("Biiirlll");
-    Serial.println("!serverConfStarted)");
+    Serial.println("serverConfStarted)");
     configMode = false;
 	digitalWrite(D7, HIGH);
     wifiManager.resetSettings();
     if (!wifiManager.startConfigPortal(chipID, chipID)) {
       //reset and try again, or maybe put it to deep sleep
-      ESP.deepSleep(0);
+     // ESP.deepSleep(0);
       delay(5000);
       return;
     }
@@ -296,16 +293,12 @@ void loop() {
       setSyncInterval(1 * 60 * 30);
     }
 
-    //if (digitalRead(D4) == HIGH) {
-      //digitalWrite(D4, LOW); //D4 has inverted logic
-    //}
-
   } else {
 	digitalWrite(D7, HIGH);
     Serial.println("WiFi.status() == WL_CONNECTED FALSEEEEE");
     attemptToConnectServer = 0;
     if (!wifiManager.autoConnect(chipID, chipID)) {
-      Serial.println("failed to connect and hit timeout in AUTOCONNECT");
+      Serial.println("Failed to connect and hit timeout in AUTOCONNECT");
       delay(3000);
       //reset and try again, or maybe put it to deep sleep
       ESP.reset();
